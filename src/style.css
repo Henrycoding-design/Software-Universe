@@ -1,0 +1,29 @@
+:root { color: #e8edf7; background: #02040b; font: 14px/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+#universe-canvas { width: 100vw; height: 100vh; display: block; cursor: grab; }
+#hud, #details, #loading { position: fixed; background: rgb(4 8 20 / 88%); border: 1px solid rgb(149 181 255 / 22%); backdrop-filter: blur(14px); }
+#hud { top: 14px; left: 14px; padding: 10px 12px; border-radius: 10px; min-width: 210px; }
+#metrics { display: grid; gap: 3px; color: #b9c8e8; margin-bottom: 8px; }
+#controls { display: flex; align-items: center; gap: 8px; }
+button, input { accent-color: #92b8ff; }
+button { color: inherit; background: #172642; border: 1px solid #31476f; border-radius: 5px; padding: 4px 8px; cursor: pointer; }
+button:hover { background: #1f3255; border-color: #4a6fa0; }
+#time-scale { width: 80px; }
+#details { top: 14px; right: 14px; width: min(340px, calc(100vw - 28px)); max-height: calc(100vh - 28px); overflow: auto; padding: 16px; border-radius: 10px; }
+.panel-header { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 2px; }
+.panel-header h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; flex: 1; }
+.panel-close { flex-shrink: 0; padding: 2px 7px; font-size: 13px; opacity: 0.7; border-radius: 5px; margin-top: 2px; }
+.panel-close:hover { opacity: 1; background: #2a1a2e; border-color: #7c4a8a; }
+#details h2 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+#details h3 { margin: 16px 0 5px; font-size: 13px; color: #b8c8e5; }
+#details p { color: #aebbd3; }
+#details dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; margin: 14px 0; }
+#details dt { color: #98a8c6; } #details dd { margin: 0; font-variant-numeric: tabular-nums; }
+#details ul { margin: 0; padding-left: 0; list-style: none; }
+.node-link { padding: 1px 0; border: 0; background: transparent; color: #9fc4ff; font: inherit; text-align: left; overflow-wrap: anywhere; }
+.node-link:hover { color: #c8dfff; text-decoration: underline; }
+.muted { margin: 3px 0; } .error { color: #ffd1d1; }
+.orbit-hint { font-size: 12px; color: #7a9bbf; background: rgb(100 180 255 / 8%); border: 1px solid rgb(100 180 255 / 18%); border-radius: 5px; padding: 4px 8px; margin: 6px 0 0; }
+#loading { left: 50%; top: 50%; translate: -50% -50%; border-radius: 8px; padding: 15px 18px; max-width: min(600px, calc(100vw - 40px)); text-align: center; }
+@media (max-width: 700px) { #details { top: auto; bottom: 10px; max-height: 42vh; } #hud { top: 10px; left: 10px; } }

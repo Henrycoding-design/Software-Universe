@@ -1,0 +1,32 @@
+{
+  "name": "software-universe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "V1 Software Universe: deps.dev dependency graph rendered as an N-body celestial simulation.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "collect": "tsx scripts/collect.ts",
+    "collect:smoke": "tsx scripts/collect.ts --limit 5 --max-nodes 40",
+    "collect:mock": "tsx scripts/collect-mock.ts",
+    "params": "tsx scripts/params.ts",
+    "classify": "tsx scripts/classify.ts",
+    "pipeline": "npm run collect && npm run params && npm run classify",
+    "pipeline:test": "npm run collect -- --dependents && npm run params && npm run classify",
+    "typecheck": "tsc --noEmit",
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/three": "^0.170.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.0"
+  }
+}

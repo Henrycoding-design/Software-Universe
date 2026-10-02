@@ -1,0 +1,14 @@
+{
+  "crawl": {
+    "maxNodes": 1000,
+    "concurrency": 10,
+    "fetchDependents": false,
+    "recentWindowsDays": [90, 365]
+  },
+  "thresholds": {
+    "star": 0.89,
+    "cometActivity": 0.85,
+    "planetMass": 0.65,
+    "moonParentShare": 0.50
+  }
+}
