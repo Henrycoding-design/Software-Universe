@@ -33,7 +33,15 @@ async function bootstrap(): Promise<void> {
       id: node.id, type: node.celestialType!, activity: node.physics!.activity, mass: masses[index]!, parentIndex: parentIndices[index]!,
     })));
     // The renderer has a one-time copy until its first transferred worker state.
-    const renderer = new UniverseRenderer(canvas, universe, characteristics, new Float32Array(initial.positions), new Float32Array(initial.velocities));
+    const renderer = new UniverseRenderer(
+      canvas,
+      universe,
+      characteristics,
+      new Float32Array(initial.positions),
+      new Float32Array(initial.velocities),
+      initial.hostIndices,
+      new Float32Array(masses),
+    );
     const nodeById = new Map(universe.nodes.map((node) => [node.id, node]));
     const dependents = new Map<string, UniverseNode[]>();
     for (const edge of universe.edges) {
@@ -87,7 +95,11 @@ async function bootstrap(): Promise<void> {
     canvas.addEventListener("click", (event) => {
       const picked = renderer.pick(event.clientX, event.clientY);
       if (picked !== null) select(picked);
-      else deselect();
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) {
+        deselect();
+      }
     });
     const animate = () => {
       const counts = renderer.render();

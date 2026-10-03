@@ -4,6 +4,7 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { CelestialType, Universe } from "../../shared/universe-types.ts";
+import { SIMULATION } from "../physics/constants.ts";
 import type { RenderCharacteristics } from "./characteristics.ts";
 
 const TYPES: readonly CelestialType[] = ["star", "planet", "moon", "asteroid", "comet"];
@@ -11,6 +12,7 @@ const WHITE = new THREE.Color(0xffffff);
 const COMET_TRAIL_POINTS = 14;
 const COMET_TRAIL_STRETCH = 52;
 const ORBIT_LOOP_SEGMENTS = 128;
+const COMET_PICK_RADIUS_PX = 8;
 
 interface BodyLookup { mesh: THREE.InstancedMesh; instanceIndex: number; type: CelestialType; }
 interface MeshGroup { mesh: THREE.InstancedMesh; type: CelestialType; }
@@ -51,7 +53,7 @@ export class UniverseRenderer {
   private hovered = -1;
 
   // Orbit path visualization for selected body
-  private orbitLine: THREE.LineLoop | null = null;
+  private orbitLine: THREE.Line | null = null;
   private orbitPoints: THREE.Points | null = null;
   private orbitTrail: THREE.Line | null = null;
   private orbitTrailPositions: Float32Array | null = null;
@@ -61,12 +63,17 @@ export class UniverseRenderer {
   // Keyboard navigation state
   private readonly keysDown = new Set<string>();
 
+  // Per-moon always-visible orbit rings, updated each frame to follow the parent planet
+  private readonly moonOrbitRings: Array<{ moonIndex: number; parentIndex: number; radius: number; line: THREE.LineLoop }> = [];
+
   constructor(
     private readonly canvas: HTMLCanvasElement,
     readonly universe: Universe,
     characteristics: readonly RenderCharacteristics[],
     initialPositions: Float32Array,
     initialVelocities: Float32Array,
+    private readonly hostIndices: Int32Array,
+    private readonly masses: Float32Array,
   ) {
     this.characteristics = characteristics;
     this.positions = initialPositions;
@@ -124,6 +131,7 @@ export class UniverseRenderer {
     this.createMeshes();
     this.createStarCorona();
     this.createCometEffects();
+    this.createMoonOrbitRings();
     this.createStarfield();
     this.resize();
     window.addEventListener("resize", this.resize);
@@ -135,6 +143,7 @@ export class UniverseRenderer {
     this.positions = positions;
     this.velocities = velocities;
     this.updateCometEffects();
+    this.updateMoonOrbitRings();
     this.updateStarCorona();
   }
 
@@ -170,7 +179,10 @@ export class UniverseRenderer {
     for (let body = 0; body < this.universe.nodes.length; body++) {
       const offset = body * 3;
       this.scratchPosition.set(this.positions[offset]!, this.positions[offset + 1]!, this.positions[offset + 2]!);
-      const radius = Math.max(0.45, this.baseScales[body]! * 1.5);
+      const type = this.universe.nodes[body]!.celestialType!;
+      const radius = type === "comet"
+        ? this.cometPickRadius(this.scratchPosition)
+        : Math.max(0.45, this.baseScales[body]! * 1.5);
       const distance = this.raycaster.ray.distanceSqToPoint(this.scratchPosition);
       if (distance <= radius * radius) {
         const alongRay = this.scratchPosition.sub(this.raycaster.ray.origin).dot(this.raycaster.ray.direction);
@@ -237,6 +249,11 @@ export class UniverseRenderer {
     window.removeEventListener("keyup", this.onKeyUp);
     this.controls.dispose();
     this.clearOrbitPath();
+    for (const { line } of this.moonOrbitRings) {
+      this.scene.remove(line);
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+    }
     this.starCoronaGeometry.dispose();
     this.cometTailGeometry.dispose();
     this.cometComaGeometry.dispose();
@@ -256,7 +273,7 @@ export class UniverseRenderer {
 
     // 1. Smooth orbit loop geometry
     const lineGeom = new THREE.BufferGeometry();
-    lineGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(ORBIT_LOOP_SEGMENTS * 3), 3));
+    lineGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array((ORBIT_LOOP_SEGMENTS + 1) * 3), 3));
     const lineMaterial = new THREE.LineBasicMaterial({
       color: orbitColor,
       transparent: true,
@@ -264,12 +281,12 @@ export class UniverseRenderer {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    this.orbitLine = new THREE.LineLoop(lineGeom, lineMaterial);
+    this.orbitLine = new THREE.Line(lineGeom, lineMaterial);
     this.orbitLine.frustumCulled = false;
 
     // 2. Dotted glowing beads along the orbit loop for high visibility
     const pointsGeom = new THREE.BufferGeometry();
-    pointsGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array((ORBIT_LOOP_SEGMENTS / 2) * 3), 3));
+    pointsGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array((ORBIT_LOOP_SEGMENTS / 2 + 1) * 3), 3));
     const pointsMaterial = new THREE.PointsMaterial({
       color: orbitColor,
       map: circularPointTexture(),
@@ -342,6 +359,7 @@ export class UniverseRenderer {
     const type = this.universe.nodes[body]!.celestialType;
     let parentX = 0, parentY = 0, parentZ = 0;
     let parentVx = 0, parentVy = 0, parentVz = 0;
+    let parentIndex = -1;
 
     if (type === "star") {
       // Star orbits the galactic core (0, 0, 0)
@@ -352,14 +370,34 @@ export class UniverseRenderer {
       let pIdx = pId ? this.universe.nodes.findIndex((n) => n.id === pId) : -1;
       if (pIdx < 0) pIdx = this.findNearestHost(body, false);
       if (pIdx >= 0) {
+        parentIndex = pIdx;
         const po = pIdx * 3;
         parentX = this.positions[po]!; parentY = this.positions[po + 1]!; parentZ = this.positions[po + 2]!;
         parentVx = this.velocities[po]!; parentVy = this.velocities[po + 1]!; parentVz = this.velocities[po + 2]!;
       }
+    } else if (type === "comet") {
+      // A comet's host is assigned by deterministic initial conditions, which
+      // need not be the closest star after the N-body simulation advances.
+      const hostIndex = this.hostIndices[body] ?? -1;
+      if (hostIndex >= 0 && this.universe.nodes[hostIndex]?.celestialType === "star") {
+        parentIndex = hostIndex;
+        const so = hostIndex * 3;
+        parentX = this.positions[so]!; parentY = this.positions[so + 1]!; parentZ = this.positions[so + 2]!;
+        parentVx = this.velocities[so]!; parentVy = this.velocities[so + 1]!; parentVz = this.velocities[so + 2]!;
+      } else {
+        const starIdx = this.findNearestStar(body);
+        if (starIdx >= 0) {
+          parentIndex = starIdx;
+          const so = starIdx * 3;
+          parentX = this.positions[so]!; parentY = this.positions[so + 1]!; parentZ = this.positions[so + 2]!;
+          parentVx = this.velocities[so]!; parentVy = this.velocities[so + 1]!; parentVz = this.velocities[so + 2]!;
+        }
+      }
     } else {
-      // Planet / Asteroid / Comet orbits its host star
+      // Planet and asteroid orbit their nearest host star.
       const starIdx = this.findNearestStar(body);
       if (starIdx >= 0) {
+        parentIndex = starIdx;
         const so = starIdx * 3;
         parentX = this.positions[so]!; parentY = this.positions[so + 1]!; parentZ = this.positions[so + 2]!;
         parentVx = this.velocities[so]!; parentVy = this.velocities[so + 1]!; parentVz = this.velocities[so + 2]!;
@@ -401,34 +439,17 @@ export class UniverseRenderer {
 
       const lineAttr = this.orbitLine.geometry.getAttribute("position") as THREE.BufferAttribute;
       const lineArray = lineAttr.array as Float32Array;
-
       const pointsAttr = this.orbitPoints?.geometry.getAttribute("position") as THREE.BufferAttribute | undefined;
       const pointsArray = pointsAttr?.array as Float32Array | undefined;
-
-      for (let i = 0; i < ORBIT_LOOP_SEGMENTS; i++) {
-        const angle = (i / ORBIT_LOOP_SEGMENTS) * Math.PI * 2;
-        const cosA = Math.cos(angle);
-        const sinA = Math.sin(angle);
-        const px = parentX + (u1x * cosA + u2x * sinA) * radius;
-        const py = parentY + (u1y * cosA + u2y * sinA) * radius;
-        const pz = parentZ + (u1z * cosA + u2z * sinA) * radius;
-        const d = i * 3;
-        lineArray[d] = px;
-        lineArray[d + 1] = py;
-        lineArray[d + 2] = pz;
-        if (pointsArray && i % 2 === 0) {
-          const pd = (i / 2) * 3;
-          pointsArray[pd] = px;
-          pointsArray[pd + 1] = py;
-          pointsArray[pd + 2] = pz;
-        }
-      }
+      const pointCount = type === "comet"
+        ? this.writeCometOrbitPath(parentIndex, parentX, parentY, parentZ, rx, ry, rz, vx, vy, vz, lineArray, pointsArray)
+        : this.writeCircularOrbitPath(parentX, parentY, parentZ, radius, u1x, u1y, u1z, u2x, u2y, u2z, lineArray, pointsArray);
 
       lineAttr.needsUpdate = true;
-      this.orbitLine.geometry.setDrawRange(0, ORBIT_LOOP_SEGMENTS);
+      this.orbitLine.geometry.setDrawRange(0, pointCount);
       if (pointsAttr) {
         pointsAttr.needsUpdate = true;
-        this.orbitPoints!.geometry.setDrawRange(0, ORBIT_LOOP_SEGMENTS / 2);
+        this.orbitPoints!.geometry.setDrawRange(0, Math.ceil(pointCount / 2));
       }
     }
 
@@ -468,6 +489,99 @@ export class UniverseRenderer {
       trailColors.needsUpdate = true;
       this.orbitTrail.geometry.setDrawRange(0, filled);
     }
+  }
+
+  /** Draw an osculating two-body conic around the comet's actual assigned host. */
+  private writeCometOrbitPath(
+    parent: number,
+    parentX: number,
+    parentY: number,
+    parentZ: number,
+    rx: number,
+    ry: number,
+    rz: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    line: Float32Array,
+    points: Float32Array | undefined,
+  ): number {
+    const radius = Math.hypot(rx, ry, rz);
+    const hx = ry * vz - rz * vy;
+    const hy = rz * vx - rx * vz;
+    const hz = rx * vy - ry * vx;
+    const angularMomentumSq = hx * hx + hy * hy + hz * hz;
+    const parentMass = parent >= 0 ? this.masses[parent]! : 1;
+    const mu = SIMULATION.gravitationalConstant * parentMass;
+    if (radius < 1e-4 || angularMomentumSq < 1e-8 || mu <= 0) {
+      return 0;
+    }
+
+    const inverseRadius = 1 / radius;
+    const eccentricityX = (vy * hz - vz * hy) / mu - rx * inverseRadius;
+    const eccentricityY = (vz * hx - vx * hz) / mu - ry * inverseRadius;
+    const eccentricityZ = (vx * hy - vy * hx) / mu - rz * inverseRadius;
+    const eccentricity = Math.hypot(eccentricityX, eccentricityY, eccentricityZ);
+    const hLength = Math.sqrt(angularMomentumSq);
+    const normalX = hx / hLength, normalY = hy / hLength, normalZ = hz / hLength;
+    const periX = eccentricity > 1e-4 ? eccentricityX / eccentricity : rx * inverseRadius;
+    const periY = eccentricity > 1e-4 ? eccentricityY / eccentricity : ry * inverseRadius;
+    const periZ = eccentricity > 1e-4 ? eccentricityZ / eccentricity : rz * inverseRadius;
+    const tangentX = normalY * periZ - normalZ * periY;
+    const tangentY = normalZ * periX - normalX * periZ;
+    const tangentZ = normalX * periY - normalY * periX;
+    const semiLatusRectum = angularMomentumSq / mu;
+    const closed = eccentricity < 0.995;
+    const pointCount = closed ? ORBIT_LOOP_SEGMENTS + 1 : ORBIT_LOOP_SEGMENTS;
+    const limit = closed ? Math.PI : Math.acos(Math.max(-1, -1 / eccentricity)) - 0.04;
+
+    for (let index = 0; index < pointCount; index++) {
+      const fraction = index / (pointCount - 1);
+      const anomaly = closed ? -Math.PI + fraction * Math.PI * 2 : -limit + fraction * limit * 2;
+      const orbitalRadius = semiLatusRectum / (1 + eccentricity * Math.cos(anomaly));
+      const cos = Math.cos(anomaly), sin = Math.sin(anomaly);
+      const offset = index * 3;
+      line[offset] = parentX + orbitalRadius * (periX * cos + tangentX * sin);
+      line[offset + 1] = parentY + orbitalRadius * (periY * cos + tangentY * sin);
+      line[offset + 2] = parentZ + orbitalRadius * (periZ * cos + tangentZ * sin);
+      if (points && index % 2 === 0) {
+        const pointOffset = (index / 2) * 3;
+        points[pointOffset] = line[offset]!;
+        points[pointOffset + 1] = line[offset + 1]!;
+        points[pointOffset + 2] = line[offset + 2]!;
+      }
+    }
+    return pointCount;
+  }
+
+  private writeCircularOrbitPath(
+    parentX: number, parentY: number, parentZ: number, radius: number,
+    u1x: number, u1y: number, u1z: number, u2x: number, u2y: number, u2z: number,
+    line: Float32Array, points: Float32Array | undefined,
+  ): number {
+    for (let index = 0; index <= ORBIT_LOOP_SEGMENTS; index++) {
+      const angle = index / ORBIT_LOOP_SEGMENTS * Math.PI * 2;
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      const offset = index * 3;
+      line[offset] = parentX + (u1x * cos + u2x * sin) * radius;
+      line[offset + 1] = parentY + (u1y * cos + u2y * sin) * radius;
+      line[offset + 2] = parentZ + (u1z * cos + u2z * sin) * radius;
+      if (points && index % 2 === 0) {
+        const pointOffset = (index / 2) * 3;
+        points[pointOffset] = line[offset]!;
+        points[pointOffset + 1] = line[offset + 1]!;
+        points[pointOffset + 2] = line[offset + 2]!;
+      }
+    }
+    return ORBIT_LOOP_SEGMENTS + 1;
+  }
+
+  /** Invisible comet-only pick radius: at least 16 CSS pixels without changing its mesh. */
+  private cometPickRadius(position: THREE.Vector3): number {
+    const distance = this.camera.position.distanceTo(position);
+    const visibleHeight = 2 * distance * Math.tan(this.camera.fov * Math.PI / 360);
+    const worldRadiusForPixels = visibleHeight * COMET_PICK_RADIUS_PX / Math.max(1, this.canvas.clientHeight);
+    return Math.max(2.5, worldRadiusForPixels);
   }
 
   private findNearestStar(body: number): number {
@@ -519,9 +633,6 @@ export class UniverseRenderer {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
     this.keysDown.add(event.key.toLowerCase());
 
-    if (event.key === "Escape") {
-      this.deselect();
-    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -734,6 +845,108 @@ export class UniverseRenderer {
     }
     this.cometTailGeometry.getAttribute("position").needsUpdate = true;
     this.cometComaGeometry.getAttribute("position").needsUpdate = true;
+  }
+
+  /** Build a colored orbit ring for every moon in the scene. Each ring uses
+   *  the moon's render color so moons of the same planet look visually distinct. */
+  private createMoonOrbitRings(): void {
+    const RING_SEGS = 60;
+    for (let moonIndex = 0; moonIndex < this.universe.nodes.length; moonIndex++) {
+      const node = this.universe.nodes[moonIndex]!;
+      if (node.celestialType !== "moon") continue;
+      const parentId = node.parentId;
+      const parentIndex = parentId ? this.universe.nodes.findIndex((n) => n.id === parentId) : -1;
+      if (parentIndex < 0) continue;
+
+      // Each moon's orbit ring uses the moon's own unique color, brightened slightly
+      const baseColor = new THREE.Color(this.characteristics[moonIndex]!.color);
+      const ringColor = baseColor.clone().offsetHSL(0, 0.12, 0.14);
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(RING_SEGS * 3), 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: ringColor,
+        transparent: true,
+        opacity: 0.40,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const line = new THREE.LineLoop(geom, mat);
+      line.frustumCulled = false;
+      this.scene.add(line);
+
+      // Compute orbital radius from current initial positions
+      const mo = moonIndex * 3;
+      const po = parentIndex * 3;
+      const dx = this.positions[mo]! - this.positions[po]!;
+      const dy = this.positions[mo + 1]! - this.positions[po + 1]!;
+      const dz = this.positions[mo + 2]! - this.positions[po + 2]!;
+      const radius = Math.hypot(dx, dy, dz) || 5;
+
+      this.moonOrbitRings.push({ moonIndex, parentIndex, radius, line });
+    }
+    // Initial geometry fill
+    this.updateMoonOrbitRings();
+  }
+
+  /** Each frame: reposition every moon orbit ring to follow its parent planet,
+   *  recompute the orbital plane from live positions, and hide rings that are
+   *  too far from the camera to be meaningful. */
+  private updateMoonOrbitRings(): void {
+    const RING_SEGS = 60;
+    const CAM_NEAR_THRESHOLD_SQ = 400 * 400;
+    for (const ring of this.moonOrbitRings) {
+      const { moonIndex, parentIndex, line } = ring;
+      const po = parentIndex * 3;
+      const mo = moonIndex * 3;
+
+      const px = this.positions[po]!, py = this.positions[po + 1]!, pz = this.positions[po + 2]!;
+
+      // Compute orbital plane normal from relative position and relative velocity
+      let rx = this.positions[mo]! - px;
+      let ry = this.positions[mo + 1]! - py;
+      let rz = this.positions[mo + 2]! - pz;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      // Update stored radius with a smooth drift toward current separation
+      ring.radius = ring.radius * 0.96 + rLen * 0.04;
+      const radius = ring.radius;
+      rx /= rLen; ry /= rLen; rz /= rLen;
+
+      const vx = this.velocities[mo]! - this.velocities[po]!;
+      const vy = this.velocities[mo + 1]! - this.velocities[po + 1]!;
+      const vz = this.velocities[mo + 2]! - this.velocities[po + 2]!;
+      // h = r × v  (angular momentum normal)
+      let hx = ry * vz - rz * vy;
+      let hy = rz * vx - rx * vz;
+      let hz = rx * vy - ry * vx;
+      const hLen = Math.hypot(hx, hy, hz) || 1;
+      hx /= hLen; hy /= hLen; hz /= hLen;
+      // u2 perpendicular to u1 in orbital plane
+      let u2x = hy * rz - hz * ry;
+      let u2y = hz * rx - hx * rz;
+      let u2z = hx * ry - hy * rx;
+      const u2Len = Math.hypot(u2x, u2y, u2z) || 1;
+      u2x /= u2Len; u2y /= u2Len; u2z /= u2Len;
+
+      // Show/hide based on camera proximity (avoid clutter for distant systems)
+      const cdx = this.camera.position.x - px;
+      const cdy = this.camera.position.y - py;
+      const cdz = this.camera.position.z - pz;
+      const camDistSq = cdx * cdx + cdy * cdy + cdz * cdz;
+      (line.material as THREE.LineBasicMaterial).opacity = camDistSq < CAM_NEAR_THRESHOLD_SQ ? 0.40 : 0.0;
+
+      const attr = line.geometry.getAttribute("position") as THREE.BufferAttribute;
+      const arr = attr.array as Float32Array;
+      for (let i = 0; i < RING_SEGS; i++) {
+        const angle = (i / RING_SEGS) * Math.PI * 2;
+        const cosA = Math.cos(angle), sinA = Math.sin(angle);
+        const d = i * 3;
+        arr[d] = px + (rx * cosA + u2x * sinA) * radius;
+        arr[d + 1] = py + (ry * cosA + u2y * sinA) * radius;
+        arr[d + 2] = pz + (rz * cosA + u2z * sinA) * radius;
+      }
+      attr.needsUpdate = true;
+    }
   }
 
   private createStarfield(): void {

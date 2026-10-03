@@ -119,7 +119,7 @@ export class UniverseInterface {
     copy.textContent = "Click a celestial body to inspect its metrics. Orbit trail renders automatically.";
     const nav = document.createElement("p");
     nav.className = "muted";
-    nav.textContent = "Navigate: WASD / Arrow keys · Q/E or scroll to zoom · Click empty space or Esc to deselect";
+    nav.textContent = "Navigate: WASD / Arrow keys · Q/E or scroll to zoom · Press Esc to deselect";
     this.panel.append(heading, copy, nav);
   }
 }

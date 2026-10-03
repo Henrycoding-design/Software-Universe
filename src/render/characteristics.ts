@@ -53,28 +53,31 @@ function natureColor(type: CelestialType, random: () => number): number {
       return hslToHex(hue + (random() - 0.5) * 12, 0.90 + random() * 0.10, 0.52 + random() * 0.10);
     }
     case "planet": {
-      // Vivid oceans, lush terran greens, warm sandstone, deep amethysts, volcanic reds
-      const hues = [12, 28, 45, 85, 145, 175, 195, 225, 275, 310];
+      // Vivid oceans, lush terran greens, warm sandstone, deep amethysts, volcanic reds,
+      // plus teal giants, rust deserts, and midnight blues
+      const hues = [12, 28, 45, 60, 85, 145, 175, 195, 225, 255, 275, 310, 330];
       const hue = hues[Math.floor(random() * hues.length)]!;
-      return hslToHex(hue + (random() - 0.5) * 10, 0.80 + random() * 0.18, 0.48 + random() * 0.12);
+      return hslToHex(hue + (random() - 0.5) * 14, 0.78 + random() * 0.20, 0.44 + random() * 0.16);
     }
     case "moon": {
-      // Pearlescent silver, frosty azure, lavender mist, and slate
-      const hues = [35, 190, 215, 260];
+      // Wide palette: pearlescent silver, frosty azure, lavender, rose, teal,
+      // coral, mint, copper, dusty lilac, and slate — each moon looks distinct
+      const hues = [15, 35, 80, 140, 165, 190, 215, 260, 290, 320];
       const hue = hues[Math.floor(random() * hues.length)]!;
-      return hslToHex(hue, 0.40 + random() * 0.25, 0.58 + random() * 0.12);
+      return hslToHex(hue + (random() - 0.5) * 18, 0.38 + random() * 0.35, 0.54 + random() * 0.18);
     }
     case "asteroid": {
-      // Rich bronze, oxidised copper, metallic gold, deep rust, slate teal
-      const hues = [16, 28, 42, 165, 210];
+      // Rich bronze, oxidised copper, metallic gold, deep rust, slate teal, charcoal grey
+      const hues = [16, 28, 42, 58, 165, 210, 240];
       const hue = hues[Math.floor(random() * hues.length)]!;
-      return hslToHex(hue, 0.60 + random() * 0.25, 0.44 + random() * 0.10);
+      return hslToHex(hue, 0.55 + random() * 0.30, 0.40 + random() * 0.14);
     }
     case "comet": {
-      // Pale pink-purple, icy cyan, and ethereal violet loved by user
-      const cometHues = [175, 200, 280, 310, 335];
+      // Full-spectrum comet palette: icy cyan, ethereal violet, hot magenta, electric
+      // green, solar orange, neon yellow, and deep indigo — visually chaotic and vivid
+      const cometHues = [22, 55, 90, 160, 175, 200, 240, 270, 290, 315, 335, 355];
       const hue = cometHues[Math.floor(random() * cometHues.length)]!;
-      return hslToHex(hue, 0.75 + random() * 0.20, 0.62 + random() * 0.10);
+      return hslToHex(hue + (random() - 0.5) * 15, 0.78 + random() * 0.22, 0.60 + random() * 0.14);
     }
   }
 }

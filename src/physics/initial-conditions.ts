@@ -12,6 +12,8 @@ export interface InitialBody {
 export interface InitialState {
   positions: Float32Array;
   velocities: Float32Array;
+  /** Stable host assignment for renderer orbit visualizations. */
+  hostIndices: Int32Array;
 }
 
 interface StarHost { body: InitialBody; index: number; }
@@ -54,7 +56,8 @@ export function createInitialState(bodies: readonly InitialBody[], seed = SIMULA
     placeOrbiter(index, parent, bodies, positions, velocities, seed, slot);
   }
   removeCenterOfMassDrift(bodies, velocities);
-  return { positions, velocities };
+  enforceCometGalaxyDirections(bodies, bodyHost, positions, velocities, seed);
+  return { positions, velocities, hostIndices: new Int32Array(bodyHost) };
 }
 
 function placeStars(
@@ -115,7 +118,7 @@ function placeOrbiter(
   const random = mulberry32(hash(`${seed}:orbit:${body.id}`));
   const offset = index * 3;
   const parentOffset = parent * 3;
-  const direction = body.type === "comet" ? randomDirection(random) : diskDirection(random, slot);
+  const direction = body.type === "comet" ? randomDirection(random) : diskDirection(random, slot, body.type === "moon");
   const radius = initialRadius(body.type, random, slot);
   positions[offset] = positions[parentOffset]! + direction[0] * radius;
   positions[offset + 1] = positions[parentOffset + 1]! + direction[1] * radius;
@@ -128,7 +131,18 @@ function placeOrbiter(
     // Start at apocentre; this produces a visibly eccentric but bound orbit.
     speed *= Math.sqrt(Math.max(0.08, 1 - eccentricity));
   } else speed *= 0.96 + body.activity * 0.08;
-  const tangent = perpendicular(direction, random);
+  let tangent: [number, number, number];
+  if (body.type === "comet") {
+    const orbit = cometOrbit(
+      direction, seed, body.id,
+      positions[offset]!, positions[offset + 2]!,
+      positions[parentOffset]!, positions[parentOffset + 2]!,
+      velocities[parentOffset]!, velocities[parentOffset + 2]!,
+      speed,
+    );
+    tangent = orbit.tangent;
+    speed = orbit.speed;
+  } else tangent = perpendicular(direction, random);
   // Orbit velocities are relative to a moving star/planet parent.
   velocities[offset] = velocities[parentOffset]! + tangent[0] * speed;
   velocities[offset + 1] = velocities[parentOffset + 1]! + tangent[1] * speed;
@@ -187,6 +201,54 @@ function removeCenterOfMassDrift(bodies: readonly InitialBody[], velocities: Flo
   }
 }
 
+/**
+ * Center-of-mass correction changes every galaxy-frame velocity. Recheck comet
+ * handedness after that correction and, for retrograde bodies, add only the
+ * tangential speed needed to make the final galaxy-frame Ly oppose its host.
+ */
+function enforceCometGalaxyDirections(
+  bodies: readonly InitialBody[],
+  hosts: Int32Array,
+  positions: Float32Array,
+  velocities: Float32Array,
+  seed: number,
+): void {
+  for (let index = 0; index < bodies.length; index++) {
+    const body = bodies[index]!;
+    if (body.type !== "comet") continue;
+    const parent = hosts[index]!;
+    if (parent < 0) continue;
+    const offset = index * 3;
+    const parentOffset = parent * 3;
+    const hostLy = angularMomentumY(positions, velocities, parent);
+    const desiredSign = (Math.sign(hostLy) || 1) * cometOrbitDirection(seed, body.id);
+    let relativeX = velocities[offset]! - velocities[parentOffset]!;
+    let relativeY = velocities[offset + 1]! - velocities[parentOffset + 1]!;
+    let relativeZ = velocities[offset + 2]! - velocities[parentOffset + 2]!;
+    const relativeSpeed = Math.hypot(relativeX, relativeY, relativeZ);
+    if (relativeSpeed < 1e-6) continue;
+    relativeX /= relativeSpeed; relativeY /= relativeSpeed; relativeZ /= relativeSpeed;
+    let tangentLy = positions[offset]! * relativeZ - positions[offset + 2]! * relativeX;
+    if (desiredSign * tangentLy < 0) {
+      relativeX = -relativeX; relativeY = -relativeY; relativeZ = -relativeZ;
+      tangentLy = -tangentLy;
+    }
+    if (desiredSign * tangentLy < 1e-6) continue;
+    const currentLy = angularMomentumY(positions, velocities, index);
+    const margin = Math.max(1, Math.abs(currentLy) * 0.05);
+    const additionalSpeed = (margin - desiredSign * currentLy) / (desiredSign * tangentLy);
+    if (additionalSpeed <= 0) continue;
+    velocities[offset]! += relativeX * additionalSpeed;
+    velocities[offset + 1]! += relativeY * additionalSpeed;
+    velocities[offset + 2]! += relativeZ * additionalSpeed;
+  }
+}
+
+function angularMomentumY(positions: Float32Array, velocities: Float32Array, index: number): number {
+  const offset = index * 3;
+  return positions[offset]! * velocities[offset + 2]! - positions[offset + 2]! * velocities[offset]!;
+}
+
 function mostMassiveBody(bodies: readonly InitialBody[]): number {
   let chosen = 0;
   for (let index = 1; index < bodies.length; index++) {
@@ -202,7 +264,9 @@ function circularSpeed(parentMass: number, radius: number): number {
 
 function initialRadius(type: CelestialType, random: () => number, slot = 0): number {
   switch (type) {
-    case "moon": return 2.8 + random() * 3.2; // strictly in [2.8, 6.0]
+    // Moons: slot-based orbital shells with jitter so multiple moons spread
+    // outward rather than clustering at the same distance from their planet.
+    case "moon": return 3.2 + slot * 3.4 + random() * 2.8;
     case "planet": return 22 + slot * 16 + random() * 6; // dedicated orbital shells
     case "comet": return 65 + slot * 20 + random() * 15; // wide eccentric orbits
     case "asteroid": return 36 + (slot % 4) * 8 + random() * 5; // spread across belt
@@ -214,10 +278,14 @@ function validParent(parent: number, count: number): boolean {
   return Number.isInteger(parent) && parent >= 0 && parent < count;
 }
 
-/** Spread orbiters with 3D inclination angles around their host star. */
-function diskDirection(random: () => number, slot = 0): [number, number, number] {
+/** Spread orbiters with 3D inclination angles around their host. Moons get
+ *  nearly spherical spread (high inclination); other types stay near the disk. */
+function diskDirection(random: () => number, slot = 0, isMoon = false): [number, number, number] {
+  // Golden-angle step ensures even azimuthal coverage for any count of orbiters
   const angle = (slot * 2.399963229728653 + random() * 0.4) % (Math.PI * 2);
-  const y = (random() - 0.5) * 0.38;
+  // Moons spread across nearly the full sphere; planets/asteroids stay near the disk
+  const inclinationRange = isMoon ? 1.8 : 0.38;
+  const y = (random() - 0.5) * inclinationRange;
   const horizontal = Math.sqrt(Math.max(0, 1 - y * y));
   return [Math.cos(angle) * horizontal, y, Math.sin(angle) * horizontal];
 }
@@ -229,14 +297,70 @@ function randomDirection(random: () => number): [number, number, number] {
   return [radius * Math.cos(angle), z, radius * Math.sin(angle)];
 }
 
-function perpendicular(direction: [number, number, number], random: () => number): [number, number, number] {
+function cometOrbitDirection(seed: number, id: string): 1 | -1 {
+  return mulberry32(hash(`${seed}:comet-direction:${id}`))() < 0.5 ? -1 : 1;
+}
+
+function cometOrbit(
+  direction: [number, number, number],
+  seed: number,
+  id: string,
+  cometX: number, cometZ: number,
+  parentX: number, parentZ: number,
+  parentVx: number, parentVz: number,
+  baseSpeed: number,
+): { tangent: [number, number, number]; speed: number } {
+  const first = tangentBasis(direction);
+  const second: [number, number, number] = [
+    direction[1] * first[2] - direction[2] * first[1],
+    direction[2] * first[0] - direction[0] * first[2],
+    direction[0] * first[1] - direction[1] * first[0],
+  ];
+  const angle = mulberry32(hash(`${seed}:comet-plane:${id}`))() * Math.PI * 2;
+  let x = first[0] * Math.cos(angle) + second[0] * Math.sin(angle);
+  let y = first[1] * Math.cos(angle) + second[1] * Math.sin(angle);
+  let z = first[2] * Math.cos(angle) + second[2] * Math.sin(angle);
+  const orbitDirection = cometOrbitDirection(seed, id);
+  const starLy = parentX * parentVz - parentZ * parentVx;
+  // A retrograde comet must oppose its host's galaxy-frame rotation; a prograde
+  // comet follows it. The core star has zero Ly, so it uses the positive axis.
+  const starSign = Math.sign(starLy) || 1; // treat zero as prograde
+  const desiredSign = starSign * orbitDirection;
+  let tangentLy = cometX * z - cometZ * x;
+  if (desiredSign * tangentLy < 0) {
+    x = -x; y = -y; z = -z;
+    tangentLy = -tangentLy;
+  }
+
+  let speed = baseSpeed;
+  if (orbitDirection === -1 && Math.abs(tangentLy) > 1e-6) {
+    // The complete galaxy-frame Ly is cometPosition × (starVelocity +
+    // tangent × speed). Increase a retrograde tangent just enough to overcome
+    // the host contribution, plus a small margin so its direction is visible.
+    const hostContribution = cometX * parentVz - cometZ * parentVx;
+    const flipMargin = Math.max(1, Math.abs(hostContribution) * 0.05);
+    const speedToFlip = (Math.max(0, -desiredSign * hostContribution) + flipMargin) / (desiredSign * tangentLy);
+    speed = Math.max(baseSpeed, speedToFlip);
+  }
+  return { tangent: [x, y, z], speed };
+}
+
+function perpendicular(
+  direction: [number, number, number],
+  random: () => number,
+): [number, number, number] {
+  const [x, y, z] = tangentBasis(direction);
+  return random() > 0.5 ? [x, y, z] : [-x, -y, -z];
+}
+
+function tangentBasis(direction: [number, number, number]): [number, number, number] {
   const reference: [number, number, number] = Math.abs(direction[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
   let x = direction[1] * reference[2] - direction[2] * reference[1];
   let y = direction[2] * reference[0] - direction[0] * reference[2];
   let z = direction[0] * reference[1] - direction[1] * reference[0];
   const length = Math.hypot(x, y, z) || 1;
   x /= length; y /= length; z /= length;
-  return random() > 0.5 ? [x, y, z] : [-x, -y, -z];
+  return [x, y, z];
 }
 
 function hash(text: string): number {

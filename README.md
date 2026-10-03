@@ -9,6 +9,7 @@ Software packages as celestial bodies: deps.dev v3 data becomes a deterministic 
 ![alt text](public/assets/img4.png)
 ![alt text](public/assets/img5.png)
 ![alt text](public/assets/img6.png)
+![alt text](public/assets/img7.png)
 
 ## Quick start
 
@@ -22,16 +23,43 @@ For an offline Stage 1 collector check, run `npm run collect:mock`. `npm run col
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  A[100 seed packages] --> B[deps.dev v3 collector]
-  B --> C[Universe JSON: graph + raw metrics]
-  C --> D[Physics parameters\nmass · activity · age · centrality]
-  D --> E[Celestial classifier\nstar · comet · planet · moon · asteroid]
-  E --> F[DataSource + render mapper]
-  F --> G[Worker: Barnes-Hut + velocity Verlet]
-  G -->|transferable position / velocity buffers| H[Three.js: 5 InstancedMeshes]
-  H --> I[LOD · bloom · picking · HUD]
+```text
++-------------------+     +----------------------+     +-----------------------------------+
+| 100 seed packages | --> | deps.dev v3 collector | --> | Universe JSON: graph + raw metrics |
++-------------------+     +----------------------+     +----------------+------------------+
+                                                                         |
+                                                                         v
+                  +---------------------------------------------------------------+
+                  | Physics parameters: mass · activity · age · centrality        |
+                  +-------------------------------+-------------------------------+
+                                                  |
+                                                  v
+                  +---------------------------------------------------------------+
+                  | Celestial classifier: star · comet · planet · moon · asteroid |
+                  +-------------------------------+-------------------------------+
+                                                  |
+                                                  v
+                  +---------------------------------------------------------------+
+                  | Browser: DataSource loads completed universe JSON             |
+                  +----------------------+---------------------+------------------+
+                                         |                     |
+                                         v                     v
+            +-------------------------+     +-----------------------------------+
+            | Initial conditions      |     | Render characteristic mapper      |
+            | (seeded, per body)      |     | (scale, brightness, color)        |
+            +------------+------------+     +----------------+------------------+
+                         |                                   |
+                         v                                   |
+            +-------------------------------+                 |
+            | Physics worker                |                 |
+            | Barnes–Hut + velocity Verlet  |                 |
+            +---------------+---------------+                 |
+                            | transferable positions/velocities |
+                            +-------------------+---------------+
+                                                v
+                  +---------------------------------------------------------------+
+                  | Three.js: 5 InstancedMeshes · LOD · bloom · picking · HUD    |
+                  +---------------------------------------------------------------+
 ```
 
 The preprocessing stages own all derived physics values. The renderer only maps completed `{ celestialType, physics }` values to visual scale, brightness, and ecosystem-tinted color; those render characteristics are deliberately not persisted in JSON.
@@ -79,7 +107,8 @@ npm test                 # unit tests
 
 - The data source is an interface; the V1 implementation loads `/data/universe.json`. A future BigQuery-backed source can replace it without affecting physics or rendering.
 - The graph schema stores edges as `source depends on target`; PageRank follows that direction to rank dependencies highly.
-- Initial conditions are seeded from body ids. Stars occupy a small center cluster; planets and moons have approximate circular parent orbits; comets begin on eccentric trajectories; asteroids form a loose belt.
+- Initial conditions are seeded from body ids. Stars form a broad co-rotating spheroid; planets and moons have approximate circular parent orbits; asteroids form loose belts; and comets begin on eccentric, three-dimensional trajectories. Every comet uses separate seeded draws for its orbital-plane angle and clockwise/counter-clockwise handedness, producing reproducible up/down, left/right, and clockwise/anti-clockwise motion.
+- Selecting a body opens its details and orbit trail. Clicking empty space leaves that selection intact; deselect only with the panel’s ✕ button or `Esc`.
 - Barnes–Hut approximates forces, and initial circular velocities do not account for every other body. The universe is intentionally visually stable rather than a precision astrophysics model.
 - Only the current rendered positions are pickable by CPU ray/sphere testing; package edges are listed in the panel but are not drawn as scene lines.
 - V1 targets roughly 100–400 bodies. It intentionally excludes WebGPU, SharedArrayBuffer, million-body optimization, spatial optimizations beyond Barnes–Hut, and interpolation between physics states.
