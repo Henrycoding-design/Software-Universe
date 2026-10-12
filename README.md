@@ -114,3 +114,4 @@ npm test                 # unit tests
 - Barnes–Hut approximates forces, and initial circular velocities do not account for every other body. The universe is intentionally visually stable rather than a precision astrophysics model.
 - Only the current rendered positions are pickable by CPU ray/sphere testing; package edges are listed in the panel but are not drawn as scene lines.
 - V1 targets roughly 100–400 bodies. It intentionally excludes WebGPU, SharedArrayBuffer, million-body optimization, spatial optimizations beyond Barnes–Hut, and interpolation between physics states.
+
