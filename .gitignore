@@ -1,5 +1,4 @@
 node_modules
 dist
 data/raw/*.json
-public/data/universe.json
 .DS_Store
