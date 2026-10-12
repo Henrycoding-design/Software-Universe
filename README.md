@@ -10,6 +10,8 @@ Software packages as celestial bodies: deps.dev v3 data becomes a deterministic 
 ![alt text](public/assets/img5.png)
 ![alt text](public/assets/img6.png)
 ![alt text](public/assets/img7.png)
+![alt text](public/assets/img8.png)
+![alt text](public/assets/img9.png)
 
 ## Quick start
 

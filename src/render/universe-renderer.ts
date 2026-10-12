@@ -63,6 +63,15 @@ export class UniverseRenderer {
   // Keyboard navigation state
   private readonly keysDown = new Set<string>();
 
+  // Camera smooth navigation/zoom transition
+  private cameraAnimation: {
+    targetIndex: number;
+    startTime: number;
+    duration: number;
+    startCamPos: THREE.Vector3;
+    startControlsTarget: THREE.Vector3;
+  } | null = null;
+
   // Per-moon always-visible orbit rings, updated each frame to follow the parent planet
   private readonly moonOrbitRings: Array<{ moonIndex: number; parentIndex: number; radius: number; line: THREE.LineLoop }> = [];
 
@@ -155,10 +164,31 @@ export class UniverseRenderer {
     }
   }
 
-  setSelected(index: number): void {
-    if (this.selected === index) return;
-    this.selected = index;
-    this.initOrbitPath();
+  setSelected(index: number, autoZoom = true): void {
+    if (this.selected !== index) {
+      this.selected = index;
+      this.initOrbitPath();
+    }
+    if (autoZoom) {
+      this.navigateToBody(index);
+    }
+  }
+
+  focusSelected(): void {
+    if (this.selected >= 0) {
+      this.navigateToBody(this.selected);
+    }
+  }
+
+  navigateToBody(index: number, duration = 650): void {
+    if (index < 0 || index >= this.universe.nodes.length) return;
+    this.cameraAnimation = {
+      targetIndex: index,
+      startTime: performance.now(),
+      duration,
+      startCamPos: this.camera.position.clone(),
+      startControlsTarget: this.controls.target.clone(),
+    };
   }
 
   setHovered(index: number): void { this.hovered = index; }
@@ -166,6 +196,7 @@ export class UniverseRenderer {
   /** Deselect currently selected body and clear all orbit line visualizations. */
   deselect(): void {
     this.selected = -1;
+    this.cameraAnimation = null;
     this.clearOrbitPath();
   }
 
@@ -194,6 +225,27 @@ export class UniverseRenderer {
 
   render(): RenderCounts {
     this.applyKeyboardNavigation();
+    if (this.cameraAnimation) {
+      const now = performance.now();
+      const progress = Math.min(1, (now - this.cameraAnimation.startTime) / this.cameraAnimation.duration);
+      const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+      const targetIdx = this.cameraAnimation.targetIndex;
+      const to = targetIdx * 3;
+      const currentBodyPos = new THREE.Vector3(this.positions[to]!, this.positions[to + 1]!, this.positions[to + 2]!);
+      const scale = this.baseScales[targetIdx] ?? 1.5;
+      const viewDist = Math.max(16, scale * 10 + 12);
+      const dir = new THREE.Vector3().subVectors(this.cameraAnimation.startCamPos, currentBodyPos);
+      if (dir.lengthSq() < 1e-4) dir.set(0, 0.4, 1);
+      dir.normalize();
+      if (dir.y < 0.25) { dir.y = 0.35; dir.normalize(); }
+      const endCamPos = currentBodyPos.clone().addScaledVector(dir, viewDist);
+
+      this.controls.target.lerpVectors(this.cameraAnimation.startControlsTarget, currentBodyPos, ease);
+      this.camera.position.lerpVectors(this.cameraAnimation.startCamPos, endCamPos, ease);
+      if (progress >= 1) {
+        this.cameraAnimation = null;
+      }
+    }
     this.controls.update();
     this.camera.updateMatrixWorld();
     this.projection.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
@@ -630,9 +682,12 @@ export class UniverseRenderer {
   // ─── Keyboard navigation ─────────────────────────────────────────────────────
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-    this.keysDown.add(event.key.toLowerCase());
-
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) return;
+    const key = event.key.toLowerCase();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright"].includes(key)) {
+      event.preventDefault();
+    }
+    this.keysDown.add(key);
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
@@ -655,10 +710,11 @@ export class UniverseRenderer {
 
     const delta = new THREE.Vector3();
 
-    if (this.keysDown.has("w") || this.keysDown.has("arrowup")) delta.addScaledVector(forward, moveSpeed);
-    if (this.keysDown.has("s") || this.keysDown.has("arrowdown")) delta.addScaledVector(forward, -moveSpeed);
-    if (this.keysDown.has("a") || this.keysDown.has("arrowleft")) delta.addScaledVector(right, -moveSpeed);
-    if (this.keysDown.has("d") || this.keysDown.has("arrowright")) delta.addScaledVector(right, moveSpeed);
+    // WASD: Camera movement (move camera, but the angle of rotation of the camera stays)
+    if (this.keysDown.has("w")) delta.addScaledVector(forward, moveSpeed);
+    if (this.keysDown.has("s")) delta.addScaledVector(forward, -moveSpeed);
+    if (this.keysDown.has("a")) delta.addScaledVector(right, -moveSpeed);
+    if (this.keysDown.has("d")) delta.addScaledVector(right, moveSpeed);
     if (this.keysDown.has("q") || this.keysDown.has("pageup")) {
       const dir = new THREE.Vector3().subVectors(this.controls.target, this.camera.position).normalize();
       delta.addScaledVector(dir, zoomSpeed);
@@ -669,8 +725,37 @@ export class UniverseRenderer {
     }
 
     if (delta.lengthSq() > 0) {
+      if (this.cameraAnimation) this.cameraAnimation = null;
       this.camera.position.add(delta);
       this.controls.target.add(delta);
+    }
+
+    // Arrow keys: Camera rotation (move the angle of rotation / look around, but the pos should stay the same)
+    const rotSpeed = fast ? 0.045 : 0.02;
+    let yaw = 0;
+    let pitch = 0;
+    if (this.keysDown.has("arrowleft")) yaw += rotSpeed;
+    if (this.keysDown.has("arrowright")) yaw -= rotSpeed;
+    if (this.keysDown.has("arrowup")) pitch += rotSpeed;
+    if (this.keysDown.has("arrowdown")) pitch -= rotSpeed;
+
+    if (yaw !== 0 || pitch !== 0) {
+      if (this.cameraAnimation) this.cameraAnimation = null;
+      const lookDir = new THREE.Vector3().subVectors(this.controls.target, this.camera.position);
+      const lookDist = Math.max(1, lookDir.length());
+      lookDir.normalize();
+
+      if (yaw !== 0) {
+        lookDir.applyAxisAngle(up, yaw);
+      }
+      if (pitch !== 0) {
+        const rightAxis = new THREE.Vector3().crossVectors(lookDir, up).normalize();
+        const currentPitch = Math.asin(Math.max(-1, Math.min(1, lookDir.y)));
+        const newPitch = Math.max(-1.45, Math.min(1.45, currentPitch + pitch));
+        lookDir.applyAxisAngle(rightAxis, newPitch - currentPitch);
+      }
+
+      this.controls.target.copy(this.camera.position).addScaledVector(lookDir, lookDist);
     }
   }
 
@@ -686,24 +771,14 @@ export class UniverseRenderer {
         ? new THREE.IcosahedronGeometry(1, type === "comet" ? 1 : 0)
         : new THREE.SphereGeometry(1, type === "star" ? 18 : 12, type === "star" ? 12 : 8);
 
-      let material: THREE.Material;
-      if (type === "star") {
-        // Star spheres use basic material with instance color — never washed out by white emissive!
-        material = new THREE.MeshBasicMaterial({
-          color: 0xffffff,
-        });
-      } else {
-        // Planets, moons, asteroids use standard material with pure black emissive
-        // so their vibrant instance colors are cleanly illuminated by the ambient & star lights!
-        material = new THREE.MeshStandardMaterial({
-          color: 0xffffff,
-          roughness: type === "asteroid" ? 0.85 : type === "moon" ? 0.65 : 0.38,
-          metalness: type === "asteroid" ? 0.15 : 0.06,
-          emissive: 0x000000,
-        });
-      }
+      // All celestial bodies use MeshBasicMaterial with instance colors so they are
+      // always vividly visible and never fail WebGL uniform limits or shadow dropouts.
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+      });
 
       const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, members.length));
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, members.length) * 3), 3);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.count = 0;
       mesh.frustumCulled = false;
@@ -711,7 +786,8 @@ export class UniverseRenderer {
       this.scene.add(mesh);
 
       if (type === "star") {
-        for (const body of members) {
+        // Cap point lights to top 4 core stars so WebGL fragment uniform limits are never exceeded
+        for (const body of members.slice(0, 4)) {
           const light = new THREE.PointLight(this.characteristics[body]!.color, this.characteristics[body]!.brightness * 2.5, 200, 1.4);
           this.starLights.push({ body, light });
           this.scene.add(light);

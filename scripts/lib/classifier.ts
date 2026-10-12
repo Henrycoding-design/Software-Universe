@@ -15,7 +15,8 @@ export interface ClassifierThresholds {
 export function primaryType(node: UniverseNode, thresholds: ClassifierThresholds): CelestialType {
   const physics = node.physics;
   if (!physics) throw new Error(`Cannot classify ${node.id}: missing physics parameters. Run npm run params first.`);
-  if (physics.centrality >= thresholds.star) return "star";
+  const isPopular = Boolean(node.isSeed) || physics.centrality >= thresholds.star || physics.mass >= thresholds.star;
+  if (isPopular) return "star";
   if (physics.activity >= thresholds.cometActivity) return "comet";
   if (physics.mass >= thresholds.planetMass) return "planet";
   return "asteroid";

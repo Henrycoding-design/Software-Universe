@@ -50,7 +50,7 @@ async function bootstrap(): Promise<void> {
     }
     let worker: Worker;
     const select = (index: number) => {
-      renderer.setSelected(index);
+      renderer.setSelected(index, true);
       const node = universe.nodes[index];
       if (node) ui.showNode(node, dependents.get(node.id) ?? []);
       else ui.showEmpty();
@@ -64,6 +64,7 @@ async function bootstrap(): Promise<void> {
       timeScale: (value) => worker.postMessage({ kind: "setTimeScale", value } satisfies PhysicsWorkerRequest),
       selectId: (id) => { const index = indices.get(id); if (index !== undefined) select(index); },
       deselect,
+      navigateBack: () => renderer.focusSelected(),
     });
     ui.showEmpty();
     worker = new Worker(new URL("./physics/physics.worker.ts", import.meta.url), { type: "module" });

@@ -1,6 +1,6 @@
 {
   "crawl": {
-    "maxNodes": 1000,
+    "maxNodes": 10000,
     "concurrency": 10,
     "fetchDependents": false,
     "recentWindowsDays": [90, 365]

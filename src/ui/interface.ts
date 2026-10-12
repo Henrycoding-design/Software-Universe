@@ -11,6 +11,7 @@ export class UniverseInterface {
   private readonly timeScale = document.querySelector<HTMLInputElement>("#time-scale")!;
   private readonly timeScaleValue = document.querySelector<HTMLElement>("#time-scale-value")!;
   private readonly panel = document.querySelector<HTMLElement>("#details")!;
+  private readonly navBackHud = document.querySelector<HTMLButtonElement>("#nav-back-control");
   private lastFrame = performance.now();
   private frames = 0;
   private fpsValue = 0;
@@ -20,11 +21,12 @@ export class UniverseInterface {
 
   constructor(
     private readonly universe: Universe,
-    handlers: {
+    private readonly handlers: {
       pause: (paused: boolean) => void;
       timeScale: (value: number) => void;
       selectId: (id: string) => void;
       deselect: () => void;
+      navigateBack: () => void;
     },
   ) {
     this.typeCount.textContent = TYPES.map(
@@ -40,14 +42,23 @@ export class UniverseInterface {
       this.timeScaleValue.textContent = `${value.toFixed(1)}×`;
       handlers.timeScale(value);
     });
+    this.navBackHud?.addEventListener("click", () => {
+      handlers.navigateBack();
+    });
     this.panel.addEventListener("click", (event) => {
       const target = event.target as HTMLElement;
       // Close button
-      if (target.classList.contains("panel-close")) {
+      if (target.closest(".panel-close")) {
         handlers.deselect();
         return;
       }
-      const id = target.dataset.nodeId;
+      // Navigate back button
+      if (target.closest(".panel-nav-back")) {
+        handlers.navigateBack();
+        return;
+      }
+      const button = target.closest<HTMLElement>("[data-node-id]");
+      const id = button?.dataset.nodeId;
       if (id) handlers.selectId(id);
     });
   }
@@ -72,19 +83,29 @@ export class UniverseInterface {
   addPhysicsSteps(steps: number): void { this.steps += steps; }
 
   showNode(node: UniverseNode, dependents: readonly UniverseNode[]): void {
+    if (this.navBackHud) this.navBackHud.style.display = "inline-flex";
     const physics = node.physics!;
     this.panel.replaceChildren();
 
-    // Header row with name + close button
+    // Header row with name + navigate back button + close button
     const header = document.createElement("div");
     header.className = "panel-header";
     const heading = document.createElement("h2");
     heading.textContent = node.name;
+
+    const navBackBtn = document.createElement("button");
+    navBackBtn.className = "panel-nav-back";
+    navBackBtn.title = "Navigate back to selected body";
+    navBackBtn.setAttribute("aria-label", "Navigate back to selected body");
+    const navIcon = document.createElement("i");
+    navIcon.className = "bi bi-arrow-counterclockwise";
+    navBackBtn.append(navIcon);
+
     const closeBtn = document.createElement("button");
     closeBtn.className = "panel-close";
     closeBtn.title = "Deselect (Esc)";
     closeBtn.textContent = "✕";
-    header.append(heading, closeBtn);
+    header.append(heading, navBackBtn, closeBtn);
 
     const version = document.createElement("p");
     version.className = "muted";
@@ -106,12 +127,13 @@ export class UniverseInterface {
 
     this.panel.append(
       header, version, hint, metrics,
-      relationList("Dependencies", node.dependencies),
-      relationList("Dependents", dependents.map((dependent) => dependent.id)),
+      relationDropdown("Dependencies", node.dependencies, (id) => this.handlers.selectId(id)),
+      relationDropdown("Dependents", dependents.map((dependent) => dependent.id), (id) => this.handlers.selectId(id)),
     );
   }
 
   showEmpty(): void {
+    if (this.navBackHud) this.navBackHud.style.display = "none";
     this.panel.replaceChildren();
     const heading = document.createElement("h2");
     heading.textContent = "Select a body";
@@ -119,7 +141,7 @@ export class UniverseInterface {
     copy.textContent = "Click a celestial body to inspect its metrics. Orbit trail renders automatically.";
     const nav = document.createElement("p");
     nav.className = "muted";
-    nav.textContent = "Navigate: WASD / Arrow keys · Q/E or scroll to zoom · Press Esc to deselect";
+    nav.textContent = "Navigate: WASD (move) · Arrow keys (rotate/look around) · Q/E or scroll to zoom · Press Esc to deselect";
     this.panel.append(heading, copy, nav);
   }
 }
@@ -130,23 +152,49 @@ function appendMetric(target: HTMLDListElement, label: string, value: string): v
   target.append(dt, dd);
 }
 
-function relationList(title: string, ids: readonly string[]): HTMLElement {
+function relationDropdown(
+  title: string,
+  ids: readonly string[],
+  onSelect: (id: string) => void,
+): HTMLElement {
   const section = document.createElement("section");
-  const heading = document.createElement("h3"); heading.textContent = title;
-  const list = document.createElement("ul");
-  for (const id of ids.slice(0, 20)) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.className = "node-link";
-    button.dataset.nodeId = id;
-    button.textContent = id;
-    item.append(button); list.append(item);
+  const heading = document.createElement("h3");
+  heading.textContent = `${title} (${ids.length})`;
+
+  if (ids.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = `No ${title.toLowerCase()}`;
+    section.append(heading, empty);
+    return section;
   }
-  if (ids.length > 20) {
-    const more = document.createElement("li");
-    more.textContent = `… ${ids.length - 20} more`;
-    list.append(more);
+
+  const select = document.createElement("select");
+  select.className = "dependencies-dropdown";
+  select.setAttribute("aria-label", `${title} list`);
+
+  const singular = title === "Dependencies" ? "dependency" : "dependent";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = `— Select a ${singular} (${ids.length}) —`;
+  defaultOption.selected = true;
+  select.append(defaultOption);
+
+  for (const id of ids) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = id;
+    select.append(option);
   }
-  section.append(heading, list);
+
+  select.addEventListener("change", () => {
+    const id = select.value;
+    if (id) {
+      onSelect(id);
+      select.value = "";
+    }
+  });
+
+  section.append(heading, select);
   return section;
 }

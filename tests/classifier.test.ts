@@ -17,9 +17,11 @@ function universe(nodes: UniverseNode[], edges: Universe["edges"]): Universe {
 }
 
 describe("celestial classifier", () => {
-  it("honors star, comet, planet precedence in that order", () => {
+  it("honors star, comet, planet precedence in that order and displays popular nodes as stars, not comets", () => {
     expect(primaryType(node("all", { centrality: 1, activity: 1, mass: 1 }), thresholds)).toBe("star");
-    expect(primaryType(node("comet", { activity: 0.9, mass: 1 }), thresholds)).toBe("comet");
+    expect(primaryType(node("popular-node", { activity: 0.9, mass: 1 }), thresholds)).toBe("star");
+    expect(primaryType({ ...node("seed", { activity: 0.9 }), isSeed: true }, thresholds)).toBe("star");
+    expect(primaryType(node("comet", { activity: 0.9, mass: 0.1 }), thresholds)).toBe("comet");
     expect(primaryType(node("planet", { mass: 0.5 }), thresholds)).toBe("planet");
     expect(primaryType(node("asteroid", {}), thresholds)).toBe("asteroid");
   });
