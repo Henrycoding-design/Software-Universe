@@ -1,5 +1,5 @@
 <div align="center" >
-    <img src="public/assets/icon.png" alt="Software Universe Logo" width="100%" style="max-width: 250px;" /> 
+    <img src="public/assets/icon.png" alt="Software Universe Logo" width="250px" /> 
 </div>
 
 # Software Universe
@@ -35,6 +35,7 @@ Software Universe turns package dependency data from [deps.dev](https://deps.dev
 ![Celestial bodies](public/assets/img7.png)
 ![Celestial bodies](public/assets/img8.png)
 ![Celestial bodies](public/assets/img9.png)
+![alt text](public/assets/img10.png)
 
 ## Requirements
 
