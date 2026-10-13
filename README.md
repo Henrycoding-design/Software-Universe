@@ -1,117 +1,158 @@
-# Software Universe (V1)
+# Software Universe
 
-Software packages as celestial bodies: deps.dev v3 data becomes a deterministic N-body universe rendered with Three.js.
+[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.6.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6.0.0-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
+[![Three.js](https://img.shields.io/badge/Three.js-0.170.0-black?logo=three.js&logoColor=white)](https://threejs.org/)
+[![tsx](https://img.shields.io/badge/tsx-4.19.0-3178C6?logo=typescript&logoColor=white)](https://github.com/privatenumber/tsx)
+[![Vitest](https://img.shields.io/badge/Vitest-2.1.0-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
+[![npm](https://img.shields.io/badge/npm-package_manager-CB3837?logo=npm&logoColor=white)](https://www.npmjs.com/)
 
-## Images
-![alt text](public/assets/img1.png)
-![alt text](public/assets/img2.png)
-![alt text](public/assets/img3.png)
-![alt text](public/assets/img4.png)
-![alt text](public/assets/img5.png)
-![alt text](public/assets/img6.png)
-![alt text](public/assets/img7.png)
-![alt text](public/assets/img8.png)
-![alt text](public/assets/img9.png)
+Software Universe turns package dependency data from [deps.dev](https://deps.dev/) into an interactive N-body galaxy. Packages become stars, planets, moons, comets, or asteroids, with dependency relationships represented by the generated universe data and package metadata shown in the interface.
 
-## Quick start
+![Software Universe screenshot](public/assets/img5.png)
+
+## Features
+
+- Collects package and dependency data from the deps.dev v3 API.
+- Builds a deterministic universe dataset from configurable seed packages.
+- Calculates package mass, activity, age, and graph centrality.
+- Classifies packages as stars, planets, moons, comets, or asteroids.
+- Simulates bodies with a Barnes–Hut N-body solver and velocity Verlet integration.
+- Runs physics calculations in a Web Worker to keep rendering responsive.
+- Renders celestial bodies with Three.js instancing, level of detail, culling, lighting, bloom, and picking.
+- Provides deterministic initial conditions, colors, orbital trails, and comet motion.
+- Displays package details, dependency information, and orbit trails in the UI.
+- Includes mock collection, smoke collection, type checking, production builds, and automated tests.
+
+## Screenshots
+
+![Celestial bodies](public/assets/img6.png)
+![Celestial bodies](public/assets/img7.png)
+![Celestial bodies](public/assets/img8.png)
+![Celestial bodies](public/assets/img9.png)
+
+## Requirements
+
+- Node.js 20 or newer
+- npm
+
+## Getting started
 
 ```bash
 npm install
-npm run pipeline   # collect → params → classify
-npm run dev        # open the URL printed by Vite
+npm run pipeline
+npm run dev
 ```
 
-For an offline Stage 1 collector check, run `npm run collect:mock`. `npm run collect:smoke` fetches five real seeds and creates a small (~40 body) dataset. Raw API responses are cached in `data/raw/`; pass `--refresh` to the collector to refresh them.
+Open the local URL printed by Vite. The pipeline collects data, calculates physics parameters, and classifies the celestial bodies before the app loads the generated universe.
 
-## Architecture
+For a local data-only check without network requests, run:
+
+```bash
+npm run collect:mock
+```
+
+For a small real-data dataset, run:
+
+```bash
+npm run collect:smoke
+npm run params
+npm run classify
+```
+
+Raw API responses are cached in `data/raw/`. Use the collector's `--refresh` option when fresh responses are required.
+
+## Data pipeline
 
 ```text
-+-------------------+     +----------------------+     +-----------------------------------+
-| 100 seed packages | --> | deps.dev v3 collector | --> | Universe JSON: graph + raw metrics |
-+-------------------+     +----------------------+     +----------------+------------------+
-                                                                         |
-                                                                         v
-                  +---------------------------------------------------------------+
-                  | Physics parameters: mass · activity · age · centrality        |
-                  +-------------------------------+-------------------------------+
-                                                  |
-                                                  v
-                  +---------------------------------------------------------------+
-                  | Celestial classifier: star · comet · planet · moon · asteroid |
-                  +-------------------------------+-------------------------------+
-                                                  |
-                                                  v
-                  +---------------------------------------------------------------+
-                  | Browser: DataSource loads completed universe JSON             |
-                  +----------------------+---------------------+------------------+
-                                         |                     |
-                                         v                     v
-            +-------------------------+     +-----------------------------------+
-            | Initial conditions      |     | Render characteristic mapper      |
-            | (seeded, per body)      |     | (scale, brightness, color)        |
-            +------------+------------+     +----------------+------------------+
-                         |                                   |
-                         v                                   |
-            +-------------------------------+                 |
-            | Physics worker                |                 |
-            | Barnes–Hut + velocity Verlet  |                 |
-            +---------------+---------------+                 |
-                            | transferable positions/velocities |
-                            +-------------------+---------------+
-                                                v
-                  +---------------------------------------------------------------+
-                  | Three.js: 5 InstancedMeshes · LOD · bloom · picking · HUD    |
-                  +---------------------------------------------------------------+
+Seed packages → deps.dev collector → universe dataset → physics parameters → celestial classification → Three.js renderer
 ```
 
-The preprocessing stages own all derived physics values. The renderer only maps completed `{ celestialType, physics }` values to visual scale, brightness, and ecosystem-tinted color; those render characteristics are deliberately not persisted in JSON.
+The browser loads the completed `public/data/universe.json` dataset. The preprocessing commands produce the graph, normalized package metrics, celestial types, and parent relationships used by the renderer.
 
-## Pipeline formulas
+## Project structure
 
-- `mass`: `log1p(dependentCount ?? crawlDependentCount)`, then tie-stable percentile normalization.
-- `activity`: `log1p(releasesLast365d + releasesLast90d)`, then percentile normalization. The 90-day window is the recency boost.
-- `age`: elapsed years from `firstPublishedAt` to `meta.generatedAt`, then percentile normalization. Missing dates are logged and assigned neutral `0.5`.
-- `centrality`: fixed-iteration PageRank (damping `0.85`) along importer → dependency links, so importance flows toward dependencies. Cycles and isolated/dangling bodies are handled deterministically.
-
-Classifier order is strict: star, comet, planet, moon, asteroid. A moon is a low-precedence body depended on by star/planet bodies, provided they make up at least `thresholds.moonParentShare` of all its dependents. Its heaviest qualifying parent wins (id breaks ties) and is stored as `parentId`.
-
-## Simulation and rendering
-
-Simulation uses visual units rather than real astronomical units: world distance units, simulation seconds, and unitless simulated mass. The sole physics tuning point is [`src/physics/constants.ts`](src/physics/constants.ts): `G = 0.3`, softening `1.1`, Barnes–Hut `θ = 0.5`, `dt = 1/60`, and simulated mass `1 + 18 × normalizedMass²`. Initial stars occupy a broad co-rotating disk, while deterministic hashing distributes primary bodies between them; this keeps separate visual solar systems from collapsing into one anchor.
-
-The worker holds all simulation position, velocity, acceleration, and mass arrays. It advances with a 60 Hz accumulator and velocity Verlet. After each drift it applies a deterministic, mass-weighted non-penetration solver with a low-restitution bounce, so simulation bodies may touch but never overlap. Snapshot positions and velocities travel to the main thread as transferable `ArrayBuffer`s; the renderer returns old buffers for reuse, without `SharedArrayBuffer`.
-
-There is exactly one `InstancedMesh` for each celestial type. LOD is presentation-only: frustum and distance culling can hide or simplify a body, but never stops its N-body integration. Every package receives a stable id-seeded natural color with only a subtle ecosystem tint. Comets use an instanced rocky nucleus plus shared gas-coma points and shared recent-position line trails. Stars add point lights and bloom.
-
-## Tuning knobs
-
-`config/universe.config.json` is the source of crawl and classification thresholds:
-
-- `crawl.maxNodes`, `concurrency`, `fetchDependents`
-- `thresholds.star`, `cometActivity`, `planetMass`, `moonParentShare`
-
-The checked-in 40-body smoke universe produces 5 stars, 3 comets, 12 planets, 2 moons, and 18 asteroids. Five stars are 12.5%, slightly above the 3–10% guideline but retained because lowering the count to four removes all valid moon relationships in this small graph. A full collection has a different distribution; increase `thresholds.star` to make stars rarer. Physics constants are collected in `src/physics/constants.ts` as described above.
+```text
+config/       Seed packages and universe configuration
+scripts/      Collection, enrichment, parameter, and classification pipeline
+shared/       Types shared by scripts and the browser
+src/data/     Universe data loading
+src/physics/  Worker-based N-body simulation
+src/render/   Three.js scene and render characteristics
+src/ui/       Interface and package details panel
+tests/        Physics, classification, rendering, and pipeline tests
+public/       Static assets and generated universe data
+```
 
 ## Commands
 
 ```bash
-npm run collect          # deps.dev v3 → public/data/universe.json
-npm run params           # fill normalized physics parameters
-npm run classify         # fill celestial types and moon parents
-npm run pipeline         # collect → params → classify
-npm run dev              # Vite development server
-npm run build            # production build
-npm run typecheck        # strict TypeScript check
-npm test                 # unit tests
+npm run collect          # Collect deps.dev data into the universe dataset
+npm run collect:smoke    # Collect a small real-data dataset
+npm run collect:mock     # Run the collector with mock data
+npm run params           # Calculate normalized physics parameters
+npm run classify         # Assign celestial types and moon parents
+npm run pipeline         # Run collect, params, and classify
+npm run dev              # Start the Vite development server
+npm run build            # Create the production bundle in dist/
+npm run typecheck        # Run the strict TypeScript check
+npm test                 # Run the test suite
 ```
 
-## Decisions and limitations
+## Deployment
 
-- The data source is an interface; the V1 implementation loads `/data/universe.json`. A future BigQuery-backed source can replace it without affecting physics or rendering.
-- The graph schema stores edges as `source depends on target`; PageRank follows that direction to rank dependencies highly.
-- Initial conditions are seeded from body ids. Stars form a broad co-rotating spheroid; planets and moons have approximate circular parent orbits; asteroids form loose belts; and comets begin on eccentric, three-dimensional trajectories. Every comet uses separate seeded draws for its orbital-plane angle and clockwise/counter-clockwise handedness, producing reproducible up/down, left/right, and clockwise/anti-clockwise motion.
-- Selecting a body opens its details and orbit trail. Clicking empty space leaves that selection intact; deselect only with the panel’s ✕ button or `Esc`.
-- Barnes–Hut approximates forces, and initial circular velocities do not account for every other body. The universe is intentionally visually stable rather than a precision astrophysics model.
-- Only the current rendered positions are pickable by CPU ray/sphere testing; package edges are listed in the panel but are not drawn as scene lines.
-- V1 targets roughly 100–400 bodies. It intentionally excludes WebGPU, SharedArrayBuffer, million-body optimization, spatial optimizations beyond Barnes–Hut, and interpolation between physics states.
+The production app is a static Vite site. Run the data pipeline before building whenever the deployed universe should contain newly collected data.
+
+### Build locally
+
+```bash
+npm ci
+npm run pipeline
+npm run build
+```
+
+Deploy the generated `dist/` directory with any static hosting provider.
+
+### Vercel
+
+Create a Vercel project connected to the repository with these settings:
+
+```text
+Build command: npm run pipeline && npm run build
+Output directory: dist
+Install command: npm ci
+```
+
+### Netlify
+
+Create a Netlify site connected to the repository and configure:
+
+```text
+Build command: npm run pipeline && npm run build
+Publish directory: dist
+```
+
+### GitHub Pages
+
+For a project site, build with the repository name as Vite's base path:
+
+```bash
+npm ci
+npm run pipeline # If you want fresh data set
+npm run build -- --base=/REPOSITORY_NAME/
+```
+
+Publish the resulting `dist/` directory using GitHub Actions or the GitHub Pages deployment workflow. Replace `REPOSITORY_NAME` with the repository name, including the surrounding slashes. For a user or organization site hosted at the root domain, use `--base=/` instead.
+
+> [!NOTE] 
+> `npm run pipeline` is **not** required for any of the deployments above. The data is already included in `public/data/universe.json`. Only run the pipeline if you want to generate a fresh set of data. To skip it, use `npm run build` alone as the build command.
+
+## Configuration
+
+Edit `config/seed-packages.json` to change the packages collected by the pipeline. Collection limits, concurrency, dependent fetching, and classification thresholds are configured in `config/universe.config.json`.
+
+## License
+
+See [LICENSE](LICENSE)
 
