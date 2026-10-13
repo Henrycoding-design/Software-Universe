@@ -2,3 +2,5 @@ node_modules
 dist
 data/raw/*.json
 .DS_Store
+
+AGENT*.md
