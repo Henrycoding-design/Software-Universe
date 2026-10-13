@@ -1,3 +1,7 @@
+<div align="center" >
+    <img src="public/assets/icon.png" alt="Software Universe Logo" width="100%" style="max-width: 500px;" /> 
+</div>
+
 # Software Universe
 
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
