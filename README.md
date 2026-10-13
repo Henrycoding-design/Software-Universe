@@ -1,5 +1,5 @@
 <div align="center" >
-    <img src="public/assets/icon.png" alt="Software Universe Logo" width="100%" style="max-width: 500px;" /> 
+    <img src="public/assets/icon.png" alt="Software Universe Logo" width="100%" style="max-width: 250px;" /> 
 </div>
 
 # Software Universe
